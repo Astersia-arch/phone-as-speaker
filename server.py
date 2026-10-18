@@ -891,9 +891,13 @@ class SpeakerServer:
         self.state.clients[viewer.id] = viewer
         log(f"[+] 客户端 #{viewer.id} 接入（共 {len(self.state.clients)} 路）  {viewer.ua}")
 
-        writer = asyncio.create_task(viewer.writer())
+        # 先发 config 再启动发送任务：队列里可能已经攒了几帧音频，若 writer 先跑
+        # 起来，首帧会抢在 config 前面到达，客户端只能按默认的 48000/2 去解，听感
+        # 是开头一段音调/速度不对，直到 config 到达才恢复。
+        writer: asyncio.Task | None = None
         try:
             await ws.send_str(self.config_msg())
+            writer = asyncio.create_task(viewer.writer())
 
             async for msg in ws:
                 if msg.type == WSMsgType.ERROR:
@@ -925,7 +929,8 @@ class SpeakerServer:
         except Exception as exc:                      # noqa: BLE001
             print(f"[!] 客户端 #{viewer.id} 处理异常：{type(exc).__name__}: {exc}", flush=True)
         finally:
-            writer.cancel()
+            if writer is not None:
+                writer.cancel()
             self.state.clients.pop(viewer.id, None)
             log(f"[-] 客户端 #{viewer.id} 断开，已发送 {viewer.sent_frames} 帧"
                 f"，丢弃 {viewer.dropped} 帧（剩余 {len(self.state.clients)} 路）")
