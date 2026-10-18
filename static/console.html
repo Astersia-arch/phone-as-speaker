@@ -307,6 +307,15 @@
     return ss + " 秒";
   }
 
+  // 转义后再进 innerHTML。UA、网卡名、adb 输出这些字符串都来自外部
+  // （手机 UA 由手机自己决定），直接拼进 HTML 等于让局域网里的一台设备
+  // 往控制台里插标签甚至脚本。
+  function esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
+
   // ---------- 曲线 ----------
   function sparkline(svg, values, stroke, fill){
     var W = 600, H = 56;
@@ -392,8 +401,8 @@
     var altBox = $("altList");
     if (alt.length){
       altBox.innerHTML = alt.map(function(l){
-        return '<div class="row"><span class="tag">' + (KIND_LABEL[l.kind] || l.kind) +
-          '</span><code>' + l.url + '</code><span>' + (l.label || "") + '</span></div>';
+        return '<div class="row"><span class="tag">' + esc(KIND_LABEL[l.kind] || l.kind) +
+          '</span><code>' + esc(l.url) + '</code><span>' + esc(l.label || "") + '</span></div>';
       }).join("");
     } else {
       altBox.innerHTML = "";
@@ -401,8 +410,8 @@
 
     var wl = $("warnList");
     wl.innerHTML = (lk.warnings || []).map(function(w){
-      return "<li>" + w + "</li>";
-    }).join("") + (lk.error ? '<li>链路探测失败：' + lk.error + "</li>" : "");
+      return "<li>" + esc(w) + "</li>";
+    }).join("") + (lk.error ? '<li>链路探测失败：' + esc(lk.error) + "</li>" : "");
 
     // 客户端
     var cl = s.clients || [];
@@ -413,7 +422,7 @@
     } else {
       body.innerHTML = cl.map(function(c){
         return "<tr><td>#" + c.id + "</td>" +
-          '<td class="ua" title="' + (c.ua || "") + '">' + (c.ua || "未知设备") + "</td>" +
+          '<td class="ua" title="' + esc(c.ua || "") + '">' + esc(c.ua || "未知设备") + "</td>" +
           "<td>" + fmtDur(c.since) + "</td>" +
           "<td>" + c.sent_frames.toLocaleString() + "</td>" +
           "<td>" + (c.dropped ? '<span class="tag bad">' + c.dropped + "</span>" : "0") + "</td>" +
