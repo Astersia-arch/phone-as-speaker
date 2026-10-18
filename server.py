@@ -548,6 +548,10 @@ class SpeakerServer:
         # clients[].dropped，也不影响 frames_out，属于"整条链路上最难发现"的丢帧。
         # 单独计数，否则它永远是一笔糊涂账。
         self.dropped_frames = 0
+        # 改参数会重启采集（关设备、开设备）。并发打进来的 N 个请求会各自
+        # 重启一遍，把设备句柄抢成随机状态。锁只做"同一时刻只允许一次变更"，
+        # 不做频率限制——按时间拒绝会误伤正常的连续调整。
+        self._config_lock = asyncio.Lock()
         self.tasks: list[asyncio.Task] = []
 
     # ---- 捕获线程 -> 事件循环 ----
@@ -774,10 +778,16 @@ class SpeakerServer:
                 changed.append(f"设备 «{v or '默认'}»")
 
         if changed:
-            self.state.config_rev += 1
-            log(f"[*] 参数已更新：{'、'.join(changed)}（重启采集生效）")
-            await self.restart_capture()
-            await self.broadcast_config()
+            if self._config_lock.locked():
+                return web.json_response(
+                    {"ok": False, "error": "上一次参数变更还在生效中，请稍后再试"},
+                    status=429)
+            async with self._config_lock:
+                self.state.config_rev += 1
+                log(f"[*] 参数已更新（来自 {request.remote}）："
+                    f"{'、'.join(changed)}（重启采集生效）")
+                await self.restart_capture()
+                await self.broadcast_config()
         elif not rejected:
             log("[*] 参数未变化")
 
