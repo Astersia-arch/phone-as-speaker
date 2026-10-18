@@ -231,13 +231,16 @@ async def run_checks() -> int:
                     {"type": "rtt", "ms": 1.4, "jitter": 0.3, "buffer_ms": 60}))
 
                 out("\n6. 参数变更")
+                # 起始分帧由链路档位决定（有线 10ms、无线 20ms），所以新值不能写死，
+                # 否则无线档下提交同一个值等于没改，rev 不涨、这条用例会假失败。
+                new_fms = 20 if fms != 20 else 10
                 async with session.post(f"{BASE}/api/config",
-                                        json={"frame_ms": 20}) as r:
+                                        json={"frame_ms": new_fms}) as r:
                     j = await r.json()
-                new_expect = int(rate * 20 / 1000) * ch * 2
+                new_expect = int(rate * new_fms / 1000) * ch * 2
                 check("POST /api/config 接受新分帧",
-                      r.status == 200 and j["config"]["frame_ms"] == 20,
-                      f"frame_ms={j['config']['frame_ms']}")
+                      r.status == 200 and j["config"]["frame_ms"] == new_fms,
+                      f"frame_ms={j['config']['frame_ms']}（原 {fms}）")
                 check("单帧字节随分帧同步变化",
                       j["config"]["frame_bytes"] == new_expect,
                       f"{j['config']['frame_bytes']}（期望 {new_expect}）")
