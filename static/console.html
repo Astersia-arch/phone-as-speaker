@@ -234,6 +234,7 @@
         <thead>
           <tr>
             <th>#</th><th>设备</th><th>已连</th><th>已发帧</th><th>丢弃</th>
+            <th>发送积压</th>
             <th>链路 RTT</th><th>抖动</th><th>缓冲</th>
           </tr>
         </thead>
@@ -407,7 +408,7 @@
     $("clientHint").textContent = cl.length ? (cl.length + " 路在线") : "—";
     var body = $("clientBody");
     if (!cl.length){
-      body.innerHTML = '<tr><td colspan="8" class="empty">暂无客户端接入</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="empty">暂无客户端接入</td></tr>';
     } else {
       body.innerHTML = cl.map(function(c){
         return "<tr><td>#" + c.id + "</td>" +
@@ -415,6 +416,11 @@
           "<td>" + fmtDur(c.since) + "</td>" +
           "<td>" + c.sent_frames.toLocaleString() + "</td>" +
           "<td>" + (c.dropped ? '<span class="tag bad">' + c.dropped + "</span>" : "0") + "</td>" +
+          // 发送积压：socket 写缓冲等内核腾位置的耗时 + 还没发出去的帧数。
+          // 这一列涨而 RTT 也涨，说明慢在我们自己排队，不是链路。
+          "<td>" + ((c.send_wait_max_ms > 0.5 || c.queued > 0)
+            ? '<span class="tag bad">' + c.send_wait_max_ms + " ms · " + c.queued + " 帧</span>"
+            : "—") + "</td>" +
           "<td>" + (c.rtt_ms != null ? (c.rtt_ms + " ms") : "—") + "</td>" +
           "<td>" + (c.jitter_ms != null ? ("±" + c.jitter_ms) : "—") + "</td>" +
           "<td>" + (c.buffer_ms != null ? (c.buffer_ms + " ms") : "—") + "</td>" +
