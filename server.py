@@ -421,6 +421,7 @@ class Viewer:
         self.dropped = 0
         self.sent_frames = 0
         self.sent_bytes = 0
+        self.closed = False                    # 发送端已放弃这一路（写失败）
         self.rtt_ms: float | None = None       # 由客户端回报的链路往返时延
         self.jitter_ms: float | None = None    # 客户端回报的 RTT 标准差
         self.buffer_ms: int | None = None      # 客户端当前缓冲档位
@@ -442,7 +443,26 @@ class Viewer:
     async def writer(self) -> None:
         while True:
             frame = await self.queue.get()
-            await self.ws.send_bytes(frame)
+            if self.ws.closed:
+                self.closed = True
+                return
+            try:
+                await self.ws.send_bytes(frame)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # 写失败（连接已断、内核缓冲满、对端消失）后如果就这么抛出去，这个
+                # task 会静默死掉：连接仍挂在 clients 里、状态显示在线、队列继续被
+                # 填满然后丢弃，用户侧表现是"连着但没声音"。这里主动关闭连接，让
+                # handle_ws 的读循环自然结束并走正常的断开清理。
+                if not self.closed:
+                    self.closed = True
+                    log(f"[!] 客户端 #{self.id} 发送失败，已关闭这一路：{exc!r}")
+                try:
+                    await self.ws.close()
+                except Exception:
+                    pass
+                return
             self.sent_frames += 1
             self.sent_bytes += len(frame)
 
