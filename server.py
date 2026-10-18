@@ -495,8 +495,9 @@ class ServerState:
     def __init__(self, cfg) -> None:
         self.cfg = cfg
         self.clients: dict[int, Viewer] = {}
-        self.frames_out = 0
+        self.frames_out = 0                 # 真正发给客户端的帧（0 客户端时不增长）
         self.bytes_out = 0
+        self.produced_frames = 0            # 采集端产出的帧，与有没有人在听无关
         self.started = time.time()
         self.capture: AudioCapture | None = None
         self.link_kind = "none"
@@ -674,8 +675,12 @@ class SpeakerServer:
             },
             "totals": {
                 "frames": s.frames_out,
+                "produced": s.produced_frames,
                 "bytes": s.bytes_out,
-                "kbps": round(s.bytes_out * 8 / elapsed / 1000.0, 1),
+                # 取最近一秒的瞬时值，而不是累计平均：断开客户端之后累计平均只会
+                # 缓慢衰减，看起来像还在发数据。
+                "kbps": s.history[-1]["kbps"] if s.history else 0.0,
+                "fps": s.history[-1]["fps"] if s.history else 0.0,
                 "dropped": self.dropped_frames,
                 "clients": len(s.clients),
             },
@@ -966,6 +971,13 @@ class SpeakerServer:
         while True:
             payload = await self.audio_q.get()
             s = self.state
+            # 采集线程没法知道有没有人在听，帧总是按 100fps 产出来。以前这里不做
+            # 判断、照单全收地累加 frames_out / bytes_out，于是 0 客户端时控制台
+            # 仍然显示 100 fps、1.5 Mbps，看着像在往网络发数据——其实一字节都没
+            # 出去。现在分开记：produced 是产出，frames/bytes 才是真发出去的。
+            s.produced_frames += 1
+            if not s.clients:
+                continue
             s.frames_out += 1
             s.bytes_out += len(payload)
             for viewer in list(s.clients.values()):
@@ -985,7 +997,7 @@ class SpeakerServer:
             rtts = [v.rtt_ms for v in s.clients.values() if v.rtt_ms is not None]
             rtt = f"  链路RTT {min(rtts):.1f} ms" if rtts else ""
             drop = f"  丢弃 {self.dropped_frames}" if self.dropped_frames else ""
-            log(f"[*] 帧 {s.frames_out:>7}  "
+            log(f"[*] 帧 {s.frames_out:>7}  产出 {s.produced_frames:>7}  "
                 f"码率 {s.bytes_out * 8 / 1000 / max(time.time() - s.started, 0.001):>7.0f} kbps  "
                 f"客户端 {len(s.clients)}{rtt}{drop}{err}")
 
