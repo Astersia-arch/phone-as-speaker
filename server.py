@@ -667,6 +667,10 @@ class SpeakerServer:
         self.state = ServerState(cfg)
         self.loop: asyncio.AbstractEventLoop | None = None
         self.audio_q: asyncio.Queue = asyncio.Queue(maxsize=cfg.queue_max)
+        # audio_q 满时丢的是最旧的一帧：这发生在分发到各客户端之前，既不计入
+        # clients[].dropped，也不影响 frames_out，属于"整条链路上最难发现"的丢帧。
+        # 单独计数，否则它永远是一笔糊涂账。
+        self.dropped_frames = 0
         self.tasks: list[asyncio.Task] = []
 
     # ---- 捕获线程 -> 事件循环 ----
@@ -683,12 +687,13 @@ class SpeakerServer:
         if self.audio_q.full():
             try:
                 self.audio_q.get_nowait()
+                self.dropped_frames += 1
             except asyncio.QueueEmpty:
                 pass
         try:
             self.audio_q.put_nowait(payload)
         except asyncio.QueueFull:
-            pass
+            self.dropped_frames += 1
 
     # ---- 捕获生命周期（可重启） ----
     def _drain_audio_queue(self) -> None:
@@ -811,6 +816,7 @@ class SpeakerServer:
                 "frames": s.frames_out,
                 "bytes": s.bytes_out,
                 "kbps": round(s.bytes_out * 8 / elapsed / 1000.0, 1),
+                "dropped": self.dropped_frames,
                 "clients": len(s.clients),
             },
             "clients": [v.snapshot() for v in s.clients.values()],
@@ -1118,9 +1124,10 @@ class SpeakerServer:
             err = f"  ⚠ {cap.error}" if cap and cap.error else ""
             rtts = [v.rtt_ms for v in s.clients.values() if v.rtt_ms is not None]
             rtt = f"  链路RTT {min(rtts):.1f} ms" if rtts else ""
+            drop = f"  丢弃 {self.dropped_frames}" if self.dropped_frames else ""
             log(f"[*] 帧 {s.frames_out:>7}  "
                 f"码率 {s.bytes_out * 8 / 1000 / max(time.time() - s.started, 0.001):>7.0f} kbps  "
-                f"客户端 {len(s.clients)}{rtt}{err}")
+                f"客户端 {len(s.clients)}{rtt}{drop}{err}")
 
     # ---- 生命周期 ----
     async def on_startup(self, app: web.Application) -> None:
