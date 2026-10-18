@@ -340,6 +340,18 @@ async def run_checks() -> int:
         widened = srv.to_int16(narrow, 6)
         check("源声道少于目标声道时补零而不是报错",
               widened.shape == (480, 6), f"shape {widened.shape}")
+        # 7.1 下混：只有右环绕(SR)有声音时，右声道该有值、左声道该静音
+        wide = np.zeros((480, 8), dtype=np.float32)
+        wide[:, 7] = 0.5
+        pcm8 = srv.to_int16(wide, 2)
+        right_peak = int(np.abs(pcm8[:, 1]).max())
+        left_peak = int(np.abs(pcm8[:, 0]).max())
+        check("7.1 下混把右环绕放到右声道",
+              right_peak > 10000 and left_peak == 0,
+              f"左 {left_peak} / 右 {right_peak}")
+        check("控制台可选 5.1 / 7.1 声道",
+              {6, 8} <= set(srv.ALLOWED_CHANNELS),
+              f"允许 {srv.ALLOWED_CHANNELS}")
 
     finally:
         proc.terminate()

@@ -155,7 +155,9 @@ DEFAULT_CAPTURE_BUFFER_MS = 100
 # 控制台允许的取值（防止 API 被灌入离谱参数）
 ALLOWED_FRAME_MS = (5, 10, 20, 30, 40, 60, 100)
 ALLOWED_RATES = (0, 48000, 44100, 32000, 24000, 16000, 8000)
-ALLOWED_CHANNELS = (1, 2)
+# 只放行布局明确的声道数：1 / 2 / 5.1(6) / 7.1(8)。5、7 声道的「切一半」没有意义
+# （6 声道截成 5 会把 BR 丢掉），所以不做，宁可让用户选 5.1 或 7.1。
+ALLOWED_CHANNELS = (1, 2, 6, 8)
 
 # 客户端每 2 秒回报一次 RTT。只保留「最近一次」时，一次 40ms 的采样就会让控制台
 # 显示成 40ms，而前后几十次都是 3ms——看上去像链路整体变差了。留 8 次（约 16 秒）
@@ -581,6 +583,11 @@ class AudioCapture:
 
             framer = Framer(max(int(want_rate * frame_ms / 1000), 1), want_ch)
 
+            kbps = want_rate * want_ch * 16 / 1000
+            if kbps > 4000:
+                log(f"[!] {want_ch} 声道 @ {want_rate} Hz 需要 {kbps:.0f} kbps，"
+                    "无线链路多半扛不住；拨不开时改回 2 声道或降到 32000 Hz")
+
             if want_rate != self.capture_rate:
                 log(f"[*] 重采样：{self.capture_rate} Hz -> {want_rate} Hz")
 
@@ -968,7 +975,7 @@ class SpeakerServer:
                     cfg.channels = v
                     changed.append(f"{v} 声道")
             else:
-                rejected.append("channels 只允许 1 或 2")
+                rejected.append(f"channels 只允许 {ALLOWED_CHANNELS}")
 
         if "rate" in data:
             try:
@@ -1452,8 +1459,10 @@ def main() -> int:
                    help="推送给客户端的采样率；0 = 与捕获采样率一致（不重采样）")
     p.add_argument("--capture-rate", type=int, default=DEFAULT_RATE,
                    help="向系统请求的捕获采样率，会按 48000/44100/32000/96000 顺序协商")
-    p.add_argument("--channels", type=int, choices=[1, 2], default=DEFAULT_CHANNELS,
-                   help="声道数；1 可省一半带宽")
+    p.add_argument("--channels", type=int, choices=list(ALLOWED_CHANNELS),
+                   default=DEFAULT_CHANNELS,
+                   help="声道数：1 省一半带宽，6/8 推送 5.1/7.1（接收端没有多声道输出时"
+                        "只是白花带宽）")
     p.add_argument("--frame-ms", type=int, default=DEFAULT_FRAME_MS,
                    help="网络分帧长度（毫秒）")
     p.add_argument("--device", default="", help="回环设备名关键字，留空用默认扬声器")
