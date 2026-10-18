@@ -119,6 +119,8 @@ async def run_checks() -> int:
             check("播放页含自适应缓冲档位", "TIERS" in player and "renderTiers" in player)
             check("播放页含抖动缓冲与 RTT 探针",
                   "nextTime" in player and '"ping"' in player and '"pong"' in player)
+            check("播放页在积压跳帧时取消未播旧帧",
+                  "cancelPending" in player and "src.stop()" in player)
 
             async with session.get(f"{BASE}/console") as r:
                 console = await r.text()
