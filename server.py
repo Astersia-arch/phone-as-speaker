@@ -94,6 +94,7 @@ STATIC_DIR = APP_DIR / "static"
 # 标准输出追加到日志文件，保证"没有终端"但仍有排查线索。
 PID_FILE = APP_DIR / ".speaker.pid"
 LOG_FILE = APP_DIR / "speaker.log"
+LOG_ROTATE_BYTES = 5 * 1024 * 1024        # 超过就换一代，避免长期运行无限增长
 
 
 def _redirect_output(path: Path) -> None:
@@ -101,8 +102,18 @@ def _redirect_output(path: Path) -> None:
 
     pythonw.exe 启动时 sys.stdout 是 None，此时把输出丢给文件，
     出问题还能打开 speaker.log 看，而不是两眼一抹黑。
+
+    文件只 append 不轮转的话，长期静默运行（开机自启）会一直长下去，
+    所以每次启动前检查一次：超过上限就换成 .1，只留一代。
     """
     try:
+        if path.exists() and path.stat().st_size > LOG_ROTATE_BYTES:
+            backup = path.with_name(path.name + ".1")
+            try:
+                backup.unlink()
+            except OSError:
+                pass
+            path.replace(backup)
         f = open(path, "a", encoding="utf-8", buffering=1)
     except Exception:                                 # noqa: BLE001
         return
@@ -581,15 +592,17 @@ class SpeakerServer:
         self.state.capture.start()
         log("[*] 开始采集")
 
-    def stop_capture(self) -> None:
+    async def stop_capture(self) -> None:
         cap = self.state.capture
         if cap:
-            cap.stop()
+            # 采集线程收尾要把 WASAPI 设备关掉，join 最长 3 秒；直接在事件循环里
+            # 等，整台机器的 HTTP 服务（控制台、改参数、健康检查）都会一起卡住。
+            await asyncio.to_thread(cap.stop)
         self.state.capture = None
         log("[*] 已停止采集")
 
-    def restart_capture(self) -> None:
-        self.stop_capture()
+    async def restart_capture(self) -> None:
+        await self.stop_capture()
         self.start_capture()
 
     # ---- HTTP：页面 ----
@@ -763,7 +776,7 @@ class SpeakerServer:
         if changed:
             self.state.config_rev += 1
             log(f"[*] 参数已更新：{'、'.join(changed)}（重启采集生效）")
-            self.restart_capture()
+            await self.restart_capture()
             await self.broadcast_config()
         elif not rejected:
             log("[*] 参数未变化")
@@ -782,9 +795,9 @@ class SpeakerServer:
         if action == "start":
             self.start_capture()
         elif action == "stop":
-            self.stop_capture()
+            await self.stop_capture()
         elif action == "restart":
-            self.restart_capture()
+            await self.restart_capture()
         elif action == "clear_log":
             LOG_RING.clear()
             log("[*] 日志已清空")
@@ -818,7 +831,7 @@ class SpeakerServer:
                 await asyncio.to_thread(usblink.teardown, self.cfg.port, log)
         except Exception:                             # noqa: BLE001
             pass
-        self.stop_capture()
+        await self.stop_capture()
         log("[*] 已退出")
         # os._exit 会跳过 main 的 finally，所以要在这里自己清 pid 文件。
         _remove_pidfile()
@@ -1031,7 +1044,7 @@ class SpeakerServer:
     async def on_cleanup(self, app: web.Application) -> None:
         for t in self.tasks:
             t.cancel()
-        self.stop_capture()
+        await self.stop_capture()
 
     def build_app(self) -> web.Application:
         app = web.Application()
