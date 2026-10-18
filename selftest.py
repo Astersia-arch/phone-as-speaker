@@ -278,6 +278,23 @@ async def run_checks() -> int:
         check("客户端断开后计数归零", h3["totals"]["clients"] == 0,
               f"clients={h3['totals']['clients']}")
 
+        out("\n10. 多声道下混与声道数归一")
+        sys.path.insert(0, str(HERE))
+        import numpy as np                              # noqa: PLC0415
+        import server as srv                            # noqa: PLC0415
+        # 只有中置有声音的 5.1：下混后左右都该有值，旧实现取前两路会变成静音
+        center = np.zeros((480, 6), dtype=np.float32)
+        center[:, 2] = 0.5
+        pcm = srv.to_int16(center, 2)
+        peak = int(np.abs(pcm).max()) if pcm.size else 0
+        check("5.1 下混保留中置（人声不会消失）",
+              pcm.shape == (480, 2) and peak > 10000, f"峰值 {peak}")
+        # 源声道少于目标声道时补零，不能让 Framer 收到列数不符的块
+        narrow = np.zeros((480, 2), dtype=np.float32)
+        widened = srv.to_int16(narrow, 6)
+        check("源声道少于目标声道时补零而不是报错",
+              widened.shape == (480, 6), f"shape {widened.shape}")
+
     finally:
         proc.terminate()
         try:
