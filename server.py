@@ -422,6 +422,11 @@ class Viewer:
         self.sent_frames = 0
         self.sent_bytes = 0
         self.closed = False                    # 发送端已放弃这一路（写失败）
+        # 发送反压：send_bytes 只有在 socket 写缓冲超过高水位、等内核腾位置时才
+        # 会真的挂住。这个耗时是"我们自己的积压"，必须与链路时延分开看——否则
+        # 客户端回报的 RTT 里混着它，看起来就像链路突然慢了十倍。
+        self.send_wait_ms = 0.0
+        self.send_wait_max = 0.0
         self.rtt_ms: float | None = None       # 由客户端回报的链路往返时延
         self.jitter_ms: float | None = None    # 客户端回报的 RTT 标准差
         self.buffer_ms: int | None = None      # 客户端当前缓冲档位
@@ -447,7 +452,11 @@ class Viewer:
                 self.closed = True
                 return
             try:
+                t0 = time.perf_counter()
                 await self.ws.send_bytes(frame)
+                self.send_wait_ms = (time.perf_counter() - t0) * 1000.0
+                if self.send_wait_ms > self.send_wait_max:
+                    self.send_wait_max = self.send_wait_ms
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -473,6 +482,9 @@ class Viewer:
             "since": round(time.time() - self.since, 1),
             "sent_frames": self.sent_frames,
             "dropped": self.dropped,
+            "queued": self.queue.qsize(),
+            "send_wait_ms": round(self.send_wait_ms, 1),
+            "send_wait_max_ms": round(self.send_wait_max, 1),
             "rtt_ms": round(self.rtt_ms, 1) if self.rtt_ms is not None else None,
             "jitter_ms": round(self.jitter_ms, 1) if self.jitter_ms is not None else None,
             "buffer_ms": self.buffer_ms,
@@ -911,8 +923,14 @@ class SpeakerServer:
 
                 mtype = req.get("type")
                 if mtype == "ping":
-                    # 链路质量探针：原样回带时间戳，客户端据此算 RTT 与抖动
-                    await ws.send_str(json.dumps({"type": "pong", "t": req.get("t")}))
+                    # 链路质量探针：原样回带时间戳，客户端据此算 RTT 与抖动。
+                    # 同时带上服务端此刻的发送反压与排队帧数，客户端才能把
+                    # "链路时延"和"我们自己积压"分开，而不是看到一个假的十倍延迟。
+                    await ws.send_str(json.dumps({
+                        "type": "pong", "t": req.get("t"),
+                        "w": round(viewer.send_wait_ms, 1),
+                        "q": viewer.queue.qsize(),
+                    }))
                 elif mtype == "rtt":
                     try:
                         viewer.rtt_ms = float(req.get("ms"))
