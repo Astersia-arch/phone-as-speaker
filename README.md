@@ -118,11 +118,20 @@ run.bat --device "扬声器"         :: 指定捕获哪一路输出
 ### 手动安装
 
 ```bash
-git clone https://github.com/<your-name>/phone-as-speaker.git
+git clone https://github.com/Astersia-arch/phone-as-speaker.git
 cd phone-as-speaker
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 .venv\Scripts\python.exe server.py --open-console
+```
+
+> 本仓库是 [alargi/phone-as-speaker](https://github.com/alargi/phone-as-speaker) 的 fork。
+> 想跟随上游更新：
+
+```bash
+git remote add upstream https://github.com/alargi/phone-as-speaker.git
+git fetch upstream
+git merge upstream/main
 ```
 
 `run.bat` 的解释器查找顺序：项目内 `.venv` → `py` 启动器 → PATH 上的 `python`。
