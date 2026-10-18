@@ -899,11 +899,28 @@ class SpeakerServer:
     async def broadcast_config(self) -> None:
         """参数变了以后通知所有客户端重建 AudioBuffer。"""
         msg = self.config_msg()
-        for v in list(self.state.clients.values()):
+        targets = [v for v in list(self.state.clients.values()) if not v.closed]
+        if not targets:
+            return
+        # 串行 await 的话，一个卡住的连接会把其余客户端和整个事件循环一起拖住
+        # （改个参数要等好几秒才有回应）。并发发，并且给每一路设上限，慢的就不
+        # 要了——反正它下一轮重连还会拿到 config。
+        await asyncio.gather(*(self._send_ctrl(v, msg) for v in targets),
+                             return_exceptions=True)
+
+    async def _send_ctrl(self, viewer: "Viewer", msg: str) -> None:
+        """发一条控制消息，超时就放弃这一路；失败不抛给调用者。"""
+        try:
+            await asyncio.wait_for(viewer.ws.send_str(msg), timeout=2.0)
+        except asyncio.TimeoutError:
+            viewer.closed = True
+            log(f"[!] 客户端 #{viewer.id} 控制消息发送超时，已放弃这一路")
             try:
-                await v.ws.send_str(msg)
-            except Exception:                         # noqa: BLE001
+                await viewer.ws.close()
+            except Exception:                     # noqa: BLE001
                 pass
+        except Exception:                         # noqa: BLE001
+            pass
 
     async def handle_ws(self, request: web.Request) -> web.StreamResponse:
         ws = web.WebSocketResponse(heartbeat=30, max_msg_size=1 << 20)
