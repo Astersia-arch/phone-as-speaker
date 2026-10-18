@@ -23,6 +23,12 @@
 - `/api/status` 的 `capture` 增加 `buffer_ms`、`buffer_fallback`、`lost_ms`、`discontinuities`；
   `/health` 增加 `capture_buffer_ms`、`capture_lost_ms`、`capture_discontinuities`。
 - 控制台显示「采集缓冲」与「音频断点」，出现断点时标红。
+**RTT 只报「最近一次」，一次尖峰就被当成链路变差**
+- 每个客户端保留最近 8 次 RTT 采样（约 16 秒），`/api/status` 与 `/health` 同时给出
+  `rtt_ms`（最近一次）、`rtt_med_ms`（中位）、`rtt_max_ms`（峰值）；5 秒统计行也从
+  「取最小值」改成「中位 / 峰」，尖峰不再被抹平，也不会再冒充常态。
+- 客户端回报的 `link_ms`（已扣掉服务端发送反压）此前被服务端丢弃，现在一并记录，
+  控制台显示「中位 · 峰 · 链路」三个数，能直接看出多出来的时间是我们的积压还是链路。
 
 ## [1.0.0] — 2026-09-13
 
