@@ -154,6 +154,7 @@
     buf: null,
     cfg: { rate: 48000, channels: 2, frame_ms: 10 },
     nextTime: 0,
+    pending: [],           // 已调度、尚未播出的源（跳帧时要能取消，否则新旧重叠=爆音）
     primed: false,
     running: false,
     wantRun: false,
@@ -239,12 +240,30 @@
   }
 
   // ---------- 抖动缓冲调度 ----------
+  // 已调度但还没播出来的源。积压跳帧时如果只把 nextTime 往前挪，旧帧仍然挂在时间轴
+  // 上等着播，新旧两段叠在一起就是「咔」的一声——所以必须把它们取消掉。
+  function prunePending(now){
+    while (S.pending.length && S.pending[0].t < now - 0.5) { S.pending.shift(); }
+  }
+
+  // 只取消「还没开始播」的源：正在播的停掉会削出爆音，让它自然放完（最多一帧）。
+  function cancelPending(now){
+    var keep = [];
+    for (var i = 0; i < S.pending.length; i++){
+      var p = S.pending[i];
+      if (p.t > now + 0.002) { try { p.src.stop(); } catch (e) {} }
+      else { keep.push(p); }
+    }
+    S.pending = keep;
+  }
+
   function schedule(audioBuf){
     var ac = S.ac;
     var now = ac.currentTime;
     var target = S.targetMs / 1000;
     // 积压上限必须大于缓冲深度，否则厚缓冲档会被误判为「积压过多」而反复重排。
     var maxLead = Math.max(0.3, target * 3);
+    prunePending(now);
 
     // 断流后重新对齐，否则会一次性补播积压数据
     if (!S.primed || S.nextTime < now + 0.004) {
@@ -253,6 +272,7 @@
     }
     // 积压过多则跳到最新，保证实时性优先
     if (S.nextTime - now > maxLead) {
+      cancelPending(now);
       S.nextTime = now + target;
       S.stat.skip++;
     }
@@ -260,7 +280,9 @@
     var src = ac.createBufferSource();
     src.buffer = audioBuf;
     src.connect(S.gain);
-    src.start(S.nextTime);
+    var startAt = S.nextTime;
+    src.start(startAt);
+    S.pending.push({ src: src, t: startAt });
     S.nextTime += audioBuf.duration;
     S.primed = true;
     S.stat.frames++;
@@ -373,6 +395,7 @@
       S.running = true;
       S.primed = false;
       S.nextTime = 0;
+      cancelPending(S.ac ? S.ac.currentTime : 0);
       S.rttSamples = [];
       resumeAudio();
       requestWakeLock();
@@ -403,6 +426,7 @@
     S.running = false;
     S.primed = false;
     S.nextTime = 0;
+    cancelPending(S.ac ? S.ac.currentTime : 0);
     S.audioBlocked = false;
     S.rttSamples = [];
     stopPing();
